@@ -1,0 +1,71 @@
+---
+title: "Simulated exposures, simulated health for one city"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+author: Jenna R. Krall
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    theme: cosmo
+    toc_depth: 2
+bibliography: ts.bib
+---
+
+
+
+
+```{r, echo = F, warning=FALSE, message=FALSE}
+# load libraries
+library(tidyverse)
+library(broom)
+library(splines)
+library(tsModel)
+
+
+library(RColorBrewer)
+library(knitr)
+
+
+# set chunk options
+opts_chunk$set(message=FALSE, fig.align = "center",
+               warning = F,tidy = F, echo = F)
+
+eval1 = T
+evalhealth <- T
+```
+
+
+
+```{r getdat}
+load("simpoll-simhealth-1.RData")
+zout <- res$zout %>%
+  mutate(., timetrend = factor(timetrend, levels = c("seasonal", "monthly", "acute"))) %>%
+  unite(modelid, error, mean, sd, magerr, timetrend)
+healthall <- mutate(res$healthall,timetrend = factor(timetrend, levels = c("seasonal", "monthly", "acute")),
+                   meanbias = meanbias * 1000,
+                   rmse = rmse * 1000) %>%
+  unite(modelid, error, mean, sd, magerr, timetrend) %>%
+  filter(., type == "error") %>%
+  select(., modelid, meanbias, rmse)
+
+
+```
+
+
+# Figure 1. Overall correlation and frequency-specific correlation for models with error added at long-term (seasonal), medium-term (monthly), and short-term (daily) scales.
+
+```{r}
+k1 <- select(zout, modelid, cut2, cor, lvr, rmse) %>%
+  gather(., type, val, -modelid, -cut2) %>%
+  group_by(., modelid, cut2, type) %>%
+  summarize(., mval = mean(val, na.rm = T)) %>%
+  filter(., cut2 %in% c("overall", "acute")) %>%
+  unite(., col, cut2, type) %>%
+  spread(., col, mval) %>%
+  select(., contains("overall"), contains("acute"), -acute_rmse) %>%
+  full_join(healthall) %>%
+  separate(., modelid, into = c("ErrorType", "mean", "sd", "magerr", "ErrorFreq"), sep = "_") %>%
+  select(., -mean, -sd, -magerr)
+
+kable(k1, digits = 2)
+```

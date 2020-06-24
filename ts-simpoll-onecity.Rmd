@@ -1,0 +1,377 @@
+---
+title: "Simulated exposures, simulated health for one city"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+author: Jenna R. Krall
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    theme: cosmo
+    toc_depth: 2
+bibliography: ts.bib
+---
+
+
+
+
+```{r, echo = F, warning=FALSE, message=FALSE}
+# load libraries
+library(tidyverse)
+library(broom)
+library(splines)
+library(tsModel)
+
+
+library(RColorBrewer)
+library(knitr)
+
+
+# set chunk options
+opts_chunk$set(message=FALSE, fig.align = "center",
+               warning = F,tidy = F, echo = F)
+
+eval1 = T
+evalhealth <- T
+```
+
+
+# Introduction
+
+Planned simulation study:
+
+1. Simulated exposures, simulated health for one city
+2. Real exposures, simulated health for one city
+3. Real exposures, simulated health for multiple cities
+
+This is part 1 of our planned simulation study.  
+
+
+```{r funcode}
+#library(timeseriessim)
+
+source("outer-sim-fns.R")
+source("inner-sim-fns.R")
+```
+
+
+
+# Methods
+
+## Summary
+
+Simulated data:
+
+- True time series: We simulate "true" pollutant time series data that includes a seasonal (cold vs. warm) trend, a monthly trends, and random noise
+- Error time series: We add error to this pollutant time series (details below)
+- Health data: We simulate "true" health data from the "true" pollutant time series
+
+Comparing results:
+
+- Overall pollutant comparison: We compare the true and error pollutant time series using metrics applied to the **overall time series**.
+- Frequency decomposition pollutant comparison: We compare the true and error pollutant time series using metrics applied to **frequency ranges within the time series**.
+- Health compare: We estimate health associations for both the true and error pollutant time series and compare the estimated health effects.
+
+## Simulating data
+
+### True pollutant time series
+
+We simulated the true pollutant time series as 
+
+\[x_t = x^{(s)} + x^{(m)} + x^(\delta)\]
+
+where:
+
+- $x^{(s)} =cos( \pi/ (365 / 2)  \times d)$ is a seasonal effect (warm vs. cold) and $d$ is the sequence of dates
+- $x^{(m)} =cos( \pi/ (365 / 12)  \times d)$ is a monthly effect and $d$ is the sequence of dates
+- $x^{(\delta)} \sim N(0, 1)$ is random error
+
+Then $x_t$ is scaled by its standard deviation so that it has a standard deviation of 1.  The true concentration scale pollutant time series is computed as $z_t = \exp{x_t \sigma_x + \mu_x}$.
+
+### Error pollutant time series
+
+We consider 4 ways of introducing error.  Let $\epsilon_t \sim N(0, \sigma_\epsilon^2)$ be random error and let $x^{(k)}$ be the $k$ frequency of the true time series, $k\in \{d, m, \delta\}$:
+
+- Classical: $x_e = x_t + \epsilon_t$
+- Berkson: $x_e = (x^{(\delta)} +\epsilon_t) / (1+ \sigma_\epsilon^2) + (x_t - x^{(\delta)})$
+- Amplitude change: $x_e = x^{(k)} * b + (x_t - x^{(k)})$, so that the amplitude change of $b$ only impacts frequency $k$.
+- Phase change: $x_e = Lag(x^{(k)}, b) + (x_t - x^{(k)})$, so that the shift change of $b$ only impacts frequency $k$.
+
+Then, to obtain the concentration scale error pollution,
+
+$z_e = \exp{x_e \sigma_x + \mu_x}$
+
+Note: The approach taken for the classical and Berkson error is derived from Goldman et al. 2011 Env Health <https://ehjournal.biomedcentral.com/articles/10.1186/1476-069X-10-61>. 
+
+
+
+
+### Health data
+
+
+We simulated health count data (e.g., hospitalizations) $Y\sim Poisson(\mu)$ where $\log(\mu) = 5 + \beta_1 \times z_t^*$, where 5 was chosen to obtain a reasonable baseline number of hospitalizations.  We select $\beta_1$ based on a reasonable relative risk for a 10$\mu$g/m$^3 increase in pollutant, e.g., $\beta_1 = log(RR) / IQR = log(1.01) / 10 \approx 0.01$.
+
+
+
+## Comparing results
+
+### Comparing pollutant time series 
+
+We compare the true and error pollutant time series using:
+
+- Correlation
+- Log Variance Ratio ($\log(var(\text{error}) /var(\text{truth}) )$) 
+
+We use these metrics applied to both:
+
+1. Overall time series  
+2. Separately by frequency ranges
+
+### Comparing estimated health associations
+
+We fitted quasi-Poisson regression models of the health data (Y) on both the true time series and the error time series.  Each model includes a natural spline with 6 degrees of freedom per year to isolate acute health effects. We compare the estimated health associations by:
+
+- Mean bias
+- Root mean squared error
+- 95% confidence interval coverage
+
+
+# Results
+
+
+```{r setup}
+# PM2.5 in NYC
+mns <- 1.9
+sds <- .6
+sderr <- 0.47
+
+# 0 for berkson, classical.  2/12 for amp/phas
+timetrends <- c(0, 0, rep(c(2, 12), 3))
+magerrs <- c(1.5, 1, 60, 14, 2, 2, .01, .01)
+errs <- c("berkson", "classical", rep(c("shift", "amplitude"), each = 2), "amplitude", "amplitude")
+
+# restrict
+inds <- seq(1, length(errs))
+timetrends <- timetrends[inds]
+magerrs <- magerrs[inds]
+errs <- errs[inds]
+```
+
+
+```{r setuphealth, eval = evalhealth}
+#######
+# health values (if needed)
+rr <- c(1.001, 1.005, 1.01, 1.02, 1.05, 1.1)
+rr <- 1.01
+iqrt <- 10
+#iqrt <- 6
+beta0 <- 5
+```
+
+
+## Sample time series
+
+Visualize the error/true time series under different error scenarios.
+
+
+
+```{r samp}
+
+inds <- seq(1, length(errs))
+day1 <- NULL
+check1 <- T
+for(i in inds) {
+  # generate pollution data
+  zex <- genpoll(1000, errtype = errs[i], mean = mns[1], sd = sds[1], magerr = magerrs[i],
+                timetrend = timetrends[i], check = check1, day = day1)
+  
+  # feed simulated day into next iteration
+  if(i == 1) {
+    check1 <- F
+    day1 <- zex$day
+    zex <- zex$zs
+  }
+  
+  # mutate and save
+  zex <- mutate(zex, timetrend = timetrends[i], errtype = errs[i], magerr = magerrs[i])
+  if(i == 1) {
+    zall <- zex
+  } else {
+    zall <- full_join(zall, zex)
+  }
+}
+
+zall1 <- zall
+zall <- filter(zall, date %in% seq(1, 365)) %>%
+  mutate(., timetrend = ifelse(errtype %in% c("berkson", "classical"), "Effect=acute", ifelse(timetrend == 2, "Effect=seasonal", ifelse(timetrend == 12, "Effect=monthly", timetrend))),
+         facet = paste0(errtype, ", MagError=", magerr, ", ", timetrend))
+
+ggplot(zall, aes(x = date, y = value, group = type, colour = type)) +
+  geom_line() +
+  facet_wrap( ~ facet, ncol = 2)
+```
+
+
+```{r, eval = F}
+# Exploration to check 12 df / year, and association for long term trends and y
+i <- 1
+nyears <- 10
+zex <- genpoll(nyears * 365, errtype = errs[i], mean = mns[1], sd = sds[1], magerr = magerrs[i],
+                timetrend = timetrends[i], check = T)
+
+dates <- filter(zex$zs, type == "truth")$date
+glm1 <- lm(zex$xt ~ ns(dates, 12 * nyears))
+new <- predict(glm1, data.frame(dates))
+resid <- glm1$residuals
+
+# 12 df/year captures trends
+plot(dates, zex$xt, xlim = c(1, 365))
+points(dates, new, col = "red")
+
+plot(dates, resid, xlim = c(1, 365))
+  
+
+beta1 <- log(1.01) / 10
+h1 <- spread(zex$zs, type, value) %>%
+  mutate(., y = healthsim(truth, beta0 = 3, beta1 = beta1))
+summary(h1$y)
+plot(h1$y)
+```
+
+
+
+
+```{r sim, eval = F}
+res <- outersim(errs, mns, sds, magerrs, timetrends, nsim = 1000, N = 365 * 10,
+                     health = T)
+save(res, file = "simpoll-simhealth-1.RData")
+```
+
+```{r}
+load("simpoll-simhealth-1.RData")
+zout <- res$zout %>%
+  mutate(., timetrend = factor(timetrend, levels = c("seasonal", "monthly", "acute")))
+healthall <- mutate(res$healthall,timetrend = factor(timetrend, levels = c("seasonal", "monthly", "acute")))
+
+
+```
+
+
+
+## Frequency decomposition: correlation
+
+
+Table of mean correlations 
+
+```{r tabcor, eval = T}
+tab1 <- getmeansd(zout) %>% filter(., meas == "cor") %>% select(., cut : mean1) %>% spread(., cut, mean1)
+kable(tab1, digits = 2)
+```
+
+### Box plots of all simulations
+
+```{r plotcor, fig.height = 6, fig.width = 8}
+
+ggplot(zout, aes(x = cut, y = cor, group = cut, colour = cut)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+  ylab("Correlation") +
+    xlab("Frequency") +  facet_wrap( error ~ timetrend , ncol = 3, scales = "free_y") +
+  theme_bw() +
+  theme(legend.position = "top", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+```
+
+
+## Frequency decomposition: log variance ratio
+
+
+Table of mean log variance ratios 
+
+```{r tablvr, eval = T}
+tab1 <- getmeansd(zout) %>% filter(., meas == "lvr") %>% select(., cut : mean1) %>% spread(., cut, mean1)
+kable(tab1, digits = 2)
+```
+
+### Box plots of all simulations
+
+```{r lvr, fig.height = 6, fig.width = 8}
+
+
+ggplot(zout, aes(x = cut, y = lvr, group = cut, colour = cut)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+
+  ylab("log(var(error) / var(truth))") +
+    xlab("Frequency") +  facet_wrap( error ~ timetrend , ncol = 3, scales = "free_y") +
+  theme_bw() +
+  theme(legend.position = "top", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+
+```
+
+
+
+## Overall RMSE
+
+```{r rmseall, eval = T}
+ggplot(filter(zout, !is.na(rmse), cut == "overall"), aes(x = timetrend, y = rmse, group = timetrend, colour = timetrend)) +
+  geom_boxplot() +
+  ylab("RMSE") +
+  geom_hline(yintercept = 0, linetype = 2) +
+  xlab("Frequency") +
+  facet_wrap(~ error, scales = "free_y") +
+  theme_bw() +
+  theme(legend.position = "top", axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+
+# Health
+
+
+## Mean bias (as a percent of beta)
+
+
+```{r, eval = evalhealth}
+
+out <- mutate(healthall, rmse = rmse * 1000, beta1 = log(rr) / iqrt, mbiasscale = meanbias / beta1,
+              id = paste0(mean, sd, magerr, error, timetrend))
+#print(out)
+out1 <- select(out, type, mbiasscale, error, timetrend, id) %>%
+  rename(., typeerror = error) %>%
+  spread(., type, mbiasscale) %>%
+  arrange(., typeerror, timetrend) %>%
+  select(., -id)
+kable(out1, digits = 2)
+```
+
+```{r, fig.height = 3, fig.width = 5, eval = F}
+#plots
+ggplot(out, aes(x = timetrend, y = meanbias, colour = type)) +
+  geom_point(position = position_dodge(0.02)) +
+  xlab("error timescale") +
+  ylab("Mean bias") +
+facet_wrap(~error)
+```
+
+## RMSE * 1000
+
+```{r,eval = evalhealth}
+out1 <- select(out, type, rmse, error, timetrend) %>%
+    rename(., typeerror = error) %>%
+  spread(., type, rmse) %>%
+  arrange(., typeerror, timetrend)
+kable(out1, digits = 2)
+```
+
+
+```{r, fig.height = 3, fig.width = 5, eval = F}
+
+
+ggplot(out, aes(x = timetrend, y = rmse, colour = type)) +
+  geom_point(position = position_dodge(0.02)) +
+  xlab("error timescale") +
+  ylab("RMSE") +
+  facet_wrap(~error)
+
+```
